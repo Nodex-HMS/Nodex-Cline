@@ -9,10 +9,10 @@ re-deriving decisions. Read this first, then `README.md` for architecture.
 
 | Thing | Location |
 |---|---|
-| Repository | `github.com/tapash250/nodex_hms`, branch `main` |
-| Phase 1 commit | `fe07e07` — "Implement Phase 1 platform foundation" |
-| Supabase project | ref `neoernavfntxsotwvmwq`, name `Nodex_HMS`, region `ap-northeast-1`, PostgreSQL 17 |
-| Migrations | `supabase/migrations/` — 21 files. Statement content verified against `supabase_migrations.schema_migrations`. Note: the migration tool strips `--` comments when recording, so verify semantics not bytes. |
+| Repository | `github.com/Nodex-HMS/Nodex-Cline`, branch `main` |
+| Phase 1 + 2 commit | `de396ca` — "feat: NODEX Enterprise HMS - Phase 1 platform foundation + Phase 2 core clinical modules"; merge `57aef73` |
+| Supabase project | ref `afvncnzdhobvnweixgdm`, URL `https://afvncnzdhobvnweixgdm.supabase.co` |
+| Migrations | `supabase/migrations/` — 40 files, all 40 applied to `afvncnzdhobvnweixgdm` and confirmed via `list_migrations`. Statement content verified against `supabase_migrations.schema_migrations`. Note: the migration tool strips `--` comments when recording, so verify semantics not bytes. |
 | Source spec | `NODEX_HMS_Final.pdf`, 44 pages (read with `pdftotext -layout`; the PDF reader tool cannot handle PDFs on this model) |
 
 ---
@@ -194,6 +194,21 @@ Deferred deliberately, not overlooked.
 - ~~**No seeded tenant**~~ — **resolved.** `phase1_bootstrap_tenant_seed`
   creates `nodex-bootstrap` (Asia/Dhaka, fixed UUIDs): 1 facility, 2
   departments, 2 wards.
+- ~~**No bootstrap administrator exist on a fresh project**~~ — **resolved.**
+  Invite `0ab1bf61-5bb2-4045-b8e9-e7cbc4871a05` (`admin@nodex.local`,
+  `hospital_super_admin`) created, then the Auth user was created; the
+  `on_auth_user_created_provision` trigger consumed the invite and produced an
+  `app_users` row (`active`), an `active` membership in tenant
+  `10000000-0000-4000-8000-000000000001`, and a `user.provisioned` audit event.
+  Password sign-in against `/auth/v1/token?grant_type=password` returns a token
+  and authenticated reads resolve to exactly the bootstrap tenant, while the
+  same reads without a token return nothing (RLS holding). The bootstrap
+  password is a throwaway and **must be rotated** before the instance is shared.
+- **Auth hardening toggles are dashboard-only.** Leaked-password protection is
+  reported disabled by the security advisor and cannot be enabled from SQL.
+- **CI secrets are not populated.** `.github/workflows/ci.yml` needs
+  `NODEX_SUPABASE_URL` and `NODEX_SUPABASE_PUBLISHABLE_KEY` repository secrets
+  before a release APK job will pass its preflight check.
 
 ---
 
@@ -203,7 +218,10 @@ Deferred deliberately, not overlooked.
    owner): tenant `10000000-0000-4000-8000-000000000001`, the admin email,
    `role_key = 'hospital_super_admin'`.
 2. Create the Supabase Auth user for the same email (dashboard or API). The
-   provisioning trigger creates `app_users` + membership automatically.
+   provisioning trigger creates `app_users` + membership automatically. With no
+   mail delivery, `supabase/bootstrap/bootstrap_admin.sql` does both steps when
+   fed to `psql`, taking the throwaway password from a `nodex.bootstrap_password`
+   setting rather than the file, and is idempotent on re-run.
 3. Build with `--dart-define=NODEX_SUPABASE_URL=…` and
    `--dart-define=NODEX_SUPABASE_PUBLISHABLE_KEY=…` (publishable, never a secret
    key — startup validation rejects privileged keys).
@@ -211,6 +229,29 @@ Deferred deliberately, not overlooked.
    snapshot, land on the role-aware home, and show which modules that role
    reaches. An uninvited account lands on the awaiting-authorization screen with
    a first-run explanation instead of a database error string.
+
+### Creating the first Auth user from SQL
+
+Sign-up through the dashboard or the Auth API is the normal path. When there is
+no mail delivery and the user must be created from SQL, three details decide
+whether sign-in works:
+
+- `auth.identities.email` is a **generated column**; supply
+  `provider_id = user_id::text`, `provider = 'email'` and an `identity_data`
+  containing `sub` and `email`. Only `id`, `user_id`, `provider_id`,
+  `provider`, `identity_data` and the timestamps are insertable.
+- GoTrue scans `confirmation_token`, `recovery_token`, `email_change` and
+  `email_change_token_new` as strings. A row inserted without them carries
+  `NULL`, and every password grant then fails with `500` before any credential
+  comparison. Set them to `''` (or coalesce them after insert).
+- Set `email_confirmed_at` so the account is usable without a verification mail,
+  and insert `auth.users` plus `auth.identities` in one statement so a failure
+  cannot leave an account that exists but cannot be looked up.
+
+Verify with a real grant rather than by reading rows: `POST
+/auth/v1/token?grant_type=password` must return an access token, and an
+authenticated `GET /rest/v1/tenants` must return only the invited tenant while
+the same request without a token returns nothing.
 
 Replication stays disconnected until `NODEX_POWERSYNC_URL` is supplied; the app
 runs local-only and says so in the settings screen.

@@ -114,6 +114,16 @@ derives roles, permissions and scopes server-side from the membership graph and
 never trusts client-supplied authorization input. `EXECUTE` is granted to
 `authenticated` only; the `anon` grant is revoked.
 
+The security advisor flags this grant (`0029_authenticated_security_definer_function_executable`).
+That finding is **accepted, not ignored**: the function is the client-facing
+issuance endpoint by design, and it authenticates the caller before doing
+anything — it raises `28000` when `auth.uid()` is null, requires an `active`,
+in-date membership in the requested tenant (`42501` otherwise), refuses devices
+assigned to another user or pending a wipe, and returns only the caller's own
+derived rights. A caller cannot pass a user id, role or permission in, so the
+grant widens reachability, not privilege. Revoking it would break offline
+authorization for every client.
+
 ### User provisioning
 
 Access is granted by invitation, never by signup. An administrator holding
