@@ -1,0 +1,234 @@
+sync_rules:
+  # Parameters are resolved from the client's Supabase JWT. The client cannot
+  # supply or influence any of them: a device can only be itself.
+  parameters:
+    - name: user_id
+      type: string
+      description: >
+        Supabase auth.uid() of the connecting device. All bucket queries below
+        derive scope from this plus the server-side membership graph.
+
+  bucket_definitions:
+    # Tenant-wide master data for every tenant the caller holds an active,
+    # unexpired membership in. This is the membership graph being the single
+    # source of truth for replication scope, exactly as RLS derives it.
+    tenant_master_data:
+      parameters:
+        - select
+            m.tenant_id as tenant_id
+          from public.memberships m
+          where m.user_id = :user_id
+            and m.status = 'active'
+            and m.valid_from <= now()
+            and (m.valid_until is null or m.valid_until > now())
+      data:
+        - select * from public.tenants where id = bucket.tenant_id
+        - select * from public.facilities where tenant_id = bucket.tenant_id
+        - select * from public.departments where tenant_id = bucket.tenant_id
+        - select * from public.wards where tenant_id = bucket.tenant_id
+        - select * from public.roles
+        - select * from public.permissions
+        - select * from public.role_permissions
+        # Staff directory within the tenant. Mirrors the app_users_select_directory
+        # RLS policy: any co-member may see directory profiles, never other
+        # tenants' staff.
+        - select
+            u.id, u.primary_tenant_id, u.full_name, u.display_name, u.designation,
+            u.employee_code, u.status, u.locale, u.avatar_path, u.last_login_at
+          from public.app_users u
+          where u.primary_tenant_id = bucket.tenant_id
+            and exists (
+              select 1 from public.memberships m
+              where m.tenant_id = bucket.tenant_id
+                and m.user_id = :user_id
+                and m.status = 'active'
+            )
+
+    # The caller's own identity and role assignments. Needed offline so the
+    # client can resolve its snapshot against live membership data.
+    membership_self:
+      parameters:
+        - select
+            m.tenant_id as tenant_id
+          from public.memberships m
+          where m.user_id = :user_id
+            and m.status = 'active'
+      data:
+        - select * from public.memberships where user_id = :user_id
+        - select * from public.app_users where id = :user_id
+
+    # The caller's own devices and per-stream sync health.
+    device_self:
+      parameters:
+        - select
+            d.tenant_id as tenant_id
+          from public.devices d
+          where d.assigned_user_id = :user_id
+      data:
+        - select * from public.devices where assigned_user_id = :user_id
+        - select * from public.sync_cursors
+          where device_id in (
+            select id from public.devices where assigned_user_id = :user_id
+          )
+
+    # AI governance configuration: registry, routing policies and deployment
+    # profiles are global read-only configuration. No PHI, no credentials —
+    # provider secrets are held server-side only.
+    ai_configuration:
+      data:
+        - select * from public.ai_model_registry
+        - select * from public.ai_routing_policies
+        - select * from public.ai_deployment_profiles
+          where is_active = true
+
+    # Audit rows the caller authored themselves. The full audit trail is
+    # queried through the server under audit.read permission; only the actor's
+    # own history belongs on a device.
+    audit_self:
+      parameters:
+        - select
+            a.tenant_id as tenant_id
+          from public.audit_events a
+          where a.actor_id = :user_id
+      data:
+        - select * from public.audit_events where actor_id = :user_id
+
+    # Module 10 (MPI): active patients in the caller's tenants. Mirrors the
+    # patients_select_member RLS policy (patient.read): any tenant member with
+    # the permission replicates the active census. Inactive (absorbed) records
+    # replicate too — the detail screen must explain a merged record rather
+    # than report it missing — but nothing outside the caller's tenants.
+    mpi_patients:
+      parameters:
+        - select
+            m.tenant_id as tenant_id
+          from public.memberships m
+          join public.role_permissions rp on rp.role_key = m.role_key
+          where m.user_id = :user_id
+            and m.status = 'active'
+            and m.valid_from <= now()
+            and (m.valid_until is null or m.valid_until > now())
+            and rp.permission_key = 'patient.read'
+      data:
+        - select * from public.patients where tenant_id = bucket.tenant_id
+        - select pa.* from public.patient_allergies pa
+          join public.patients p on p.id = pa.patient_id
+          where p.tenant_id = bucket.tenant_id
+        - select mh.* from public.patient_merge_history mh
+          where mh.tenant_id = bucket.tenant_id
+
+    # Module 16 (encounters): encounters for patients in the caller's tenants.
+    # Mirrors the clinical_encounters_select_member RLS policy (encounter.read).
+    # Amendments travel with their encounter: a device that holds a signed
+    # record must also hold its corrections, or the frozen content reads as
+    # current when it is not.
+    emr_encounters:
+      parameters:
+        - select
+            m.tenant_id as tenant_id
+          from public.memberships m
+          join public.role_permissions rp on rp.role_key = m.role_key
+          where m.user_id = :user_id
+            and m.status = 'active'
+            and m.valid_from <= now()
+            and (m.valid_until is null or m.valid_until > now())
+            and rp.permission_key = 'encounter.read'
+      data:
+        - select e.* from public.clinical_encounters e
+          join public.patients p on p.id = e.patient_id
+          where p.tenant_id = bucket.tenant_id
+        - select am.* from public.encounter_amendments am
+          join public.clinical_encounters e on e.id = am.encounter_id
+          join public.patients p on p.id = e.patient_id
+          where p.tenant_id = bucket.tenant_id
+        # Module 23 (discharge): the discharge travels with its encounter, or
+        # the record reads as open when it is closed.
+        - select d.* from public.discharges d
+          join public.clinical_encounters e on e.id = d.encounter_id
+          join public.patients p on p.id = e.patient_id
+          where p.tenant_id = bucket.tenant_id
+
+    # Module 17 (laboratory): orders, barcode specimens and results for the
+    # caller's patient-read tenants. Verified rows and corrections both travel:
+    # the result screen must show the original value and its correction chain.
+    lab_workflows:
+      parameters:
+        - select
+            m.tenant_id as tenant_id
+          from public.memberships m
+          join public.role_permissions rp on rp.role_key = m.role_key
+          where m.user_id = :user_id
+            and m.status = 'active'
+            and m.valid_from <= now()
+            and (m.valid_until is null or m.valid_until > now())
+            and rp.permission_key = 'patient.read'
+      data:
+        - select * from public.lab_orders where tenant_id = bucket.tenant_id
+        - select s.* from public.lab_specimens s
+          join public.lab_orders o on o.id = s.lab_order_id
+          where o.tenant_id = bucket.tenant_id
+        - select r.* from public.lab_results r
+          where r.tenant_id = bucket.tenant_id
+
+    # Module 25 (prescriptions/pharmacy): orders, lines, dispense events and
+    # MAR events for the caller's patient-read tenants. Superseded versions
+    # travel too: the detail screen must show what was authorized before, not
+    # just the current version. Events are append-only, so no pruning by
+    # status — a device that holds an order holds its full dispense history.
+    rx_pharmacy:
+      parameters:
+        - select
+            m.tenant_id as tenant_id
+          from public.memberships m
+          join public.role_permissions rp on rp.role_key = m.role_key
+          where m.user_id = :user_id
+            and m.status = 'active'
+            and m.valid_from <= now()
+            and (m.valid_until is null or m.valid_until > now())
+            and rp.permission_key = 'patient.read'
+      data:
+        - select * from public.prescriptions where tenant_id = bucket.tenant_id
+        - select i.* from public.prescription_items i
+          join public.prescriptions p on p.id = i.prescription_id
+          where p.tenant_id = bucket.tenant_id
+        - select d.* from public.pharmacy_dispenses d
+          where d.tenant_id = bucket.tenant_id
+        - select a.* from public.medication_administrations a
+          where a.tenant_id = bucket.tenant_id
+
+    # Module 07 (appointments): bookings for the caller's appointment-read
+    # tenants. History travels too: the timeline and the provider schedule
+    # read past visits, not just upcoming ones.
+    appt_schedule:
+      parameters:
+        - select
+            m.tenant_id as tenant_id
+          from public.memberships m
+          join public.role_permissions rp on rp.role_key = m.role_key
+          where m.user_id = :user_id
+            and m.status = 'active'
+            and m.valid_from <= now()
+            and (m.valid_until is null or m.valid_until > now())
+            and rp.permission_key = 'appointment.read'
+      data:
+        - select * from public.appointments where tenant_id = bucket.tenant_id
+
+    # Module 11 (beds): ward beds and occupancy for the caller's
+    # patient-read tenants. The census board reads beds with their active
+    # assignments, so both travel together.
+    ward_census:
+      parameters:
+        - select
+            m.tenant_id as tenant_id
+          from public.memberships m
+          join public.role_permissions rp on rp.role_key = m.role_key
+          where m.user_id = :user_id
+            and m.status = 'active'
+            and m.valid_from <= now()
+            and (m.valid_until is null or m.valid_until > now())
+            and rp.permission_key = 'patient.read'
+      data:
+        - select * from public.beds where tenant_id = bucket.tenant_id
+        - select a.* from public.bed_assignments a
+          join public.beds b on b.id = a.bed_id
+          where b.tenant_id = bucket.tenant_id
