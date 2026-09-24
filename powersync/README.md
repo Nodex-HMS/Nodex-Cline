@@ -40,8 +40,10 @@ acceptance test inspects the local database, not the UI. Defined so far:
 `mpi_patients` (Module 10), `emr_encounters` (Module 16), `lab_workflows`
 (Module 17), `rx_pharmacy` (Module 25, including superseded versions and the
 MAR), `appt_schedule` (Module 07), `ward_census` (Module 11, beds with active
-assignments); discharges (Module 23) travel inside `emr_encounters` with
-their encounter. Remaining: billing and the rest of the 54-module scope.
+assignments), `billing_ledger` (Module 31, invoices with their lines, payments
+and refunds) and `stock_control` (Module 13, catalogue, locations, batches and
+movements); discharges (Module 23) travel inside `emr_encounters` with
+their encounter. Remaining: the rest of the 54-module scope.
 
 ## Upload path
 

@@ -146,21 +146,43 @@ final class StockItem {
     'updated_at': DateTime.now().toUtc().toIso8601String(),
   };
 
-  factory StockItem.fromRow(Map<String, Object?> row) => StockItem(
-    id: row['id']! as String,
-    tenantId: row['tenant_id']! as String,
-    itemCode: row['item_code']! as String,
-    name: row['name']! as String,
-    category: row['category']! as String,
-    unit: row['unit']! as String,
-    status: StockItemStatus.fromWire(row['status']! as String),
-    createdAt: DateTime.parse(row['created_at']! as String),
-    description: row['description'] as String?,
-    reorderLevel: (row['reorder_level'] as num?)?.toDouble(),
-    standardCostMinor: (row['standard_cost_minor'] as num?)?.toInt(),
-    requiresBatch: row['requires_batch'] as bool?,
-    requiresExpiry: row['requires_expiry'] as bool?,
-  );
+  factory StockItem.fromRow(Map<String, Object?> row) {
+    // Booleans arrive as JSON booleans from the server and as 0/1 from the
+    // PowerSync SQLite projection, so both shapes are read here. A cast would
+    // work online and fail on the device.
+    bool? parseBool(String key) {
+      final Object? value = row[key];
+      if (value == null) {
+        return null;
+      }
+      if (value is bool) {
+        return value;
+      }
+      if (value is int) {
+        return value != 0;
+      }
+      if (value is String) {
+        return value == '1' || value.toLowerCase() == 'true';
+      }
+      throw FormatException('stock item row field "$key" is not a boolean');
+    }
+
+    return StockItem(
+      id: row['id']! as String,
+      tenantId: row['tenant_id']! as String,
+      itemCode: row['item_code']! as String,
+      name: row['name']! as String,
+      category: row['category']! as String,
+      unit: row['unit']! as String,
+      status: StockItemStatus.fromWire(row['status']! as String),
+      createdAt: DateTime.parse(row['created_at']! as String),
+      description: row['description'] as String?,
+      reorderLevel: (row['reorder_level'] as num?)?.toDouble(),
+      standardCostMinor: (row['standard_cost_minor'] as num?)?.toInt(),
+      requiresBatch: parseBool('requires_batch'),
+      requiresExpiry: parseBool('requires_expiry'),
+    );
+  }
 
   final String id;
   final String tenantId;
@@ -180,8 +202,8 @@ final class StockItem {
     final String? trimmed = value?.trim();
     return trimmed == null || trimmed.isEmpty ? null : trimmed;
   }
-
 }
+
 /// Storage location.
 @immutable
 final class StockLocation {

@@ -199,6 +199,53 @@ The mutation path registers the three laboratory tables with per-operation
 audit actions. The PowerSync rules include them in the `lab_workflows` bucket;
 the local repository/use cases enforce the same state gates before writes.
 
+### Billing ledger (Module 31)
+
+`invoices`, `invoice_lines`, `payments` and `refunds` store money in integer
+minor units with an ISO-4217 currency code, never as a floating-point amount:
+binary floating point cannot represent decimal currency exactly, and a
+half-paisa rounding error in a settlement is a defect. The balance is derived,
+never stored twice — `tg_payment_running_total` always recomputes
+`amount_received_minor` from the ledger instead of trusting a client-supplied
+value, and settlement writes `settled_minor` from the invoice's own total
+(`tg_invoice_settlement_snapshot`), because that is what "settled" means.
+
+Concurrency is arbitrated by the database, not the client
+(`ConflictPolicy.transactional`): `payment_running_total_unique` excludes two
+payment events on the same invoice that share a running total, so a genuinely
+concurrent replay computed from the same prior state collides and is rejected on
+upload, while sequential instalments are accepted. The earlier overlap-based
+exclusion refused the legitimate second instalment, which is why the predicate
+is equality on the running total rather than a range overlap.
+
+`payments` and `refunds` are append-only (`tg_block_mutation` refuses UPDATE and
+DELETE for every role), and a refund cannot exceed what was received for that
+payment (`tg_refund_within_received`). Line edits are confined to draft
+invoices (`tg_invoice_line_draft_guard`) and invoice transitions are guarded by
+`tg_invoice_transition_guard`. RLS grants reads under `billing.read` and writes
+under `billing.settle`; the sync rules replicate the ledger through
+`billing_ledger`, and the mutation path registers all four tables.
+
+### Inventory and stock control (Module 13)
+
+`stock_items`, `stock_locations`, `stock_batches` and `stock_movements` hold
+stock as a replayed ledger: balances derive from movements rather than being
+overwritten (`ConflictPolicy.transactional`). Item and batch lifecycle
+transitions are guarded in the database (`tg_stock_item_draft_guard`,
+`tg_stock_batch_status_guard`), and items are retired by status, never deleted.
+
+`stock_movements` is append-only on the same terms as the financial ledger:
+`stock_movements_append_only` refuses UPDATE and DELETE for every role, and the
+writer-scoped UPDATE policy was dropped with it, so a recorded movement cannot
+be edited through the API even by a holder of `inventory.movement`. That guard
+was added after the module's first cut, where the migration's own note
+("movements are immutable events") had nothing enforcing it.
+
+RLS grants reads under `patient.read` — a ward sees the stock it may issue
+against — and writes under `inventory.movement`. The sync rules replicate the
+module through `stock_control`, because a ward validates a request offline and
+needs expiry and availability to do so.
+
 ### Backend mutation path
 
 `supabase/functions/mutation-handler` (deployed, `verify_jwt: true`,
@@ -209,11 +256,17 @@ finally) → idempotency ledger (`received` first, so a ledger failure blocks th
 apply) → audit-before-apply → apply under RLS → ledger marked
 applied/rejected. Unknown outcomes from the client side decode as rejections.
 
-Registered tables: `patients` (upsert `patient.registered`, patch
-`patient.updated`), `patient_allergies` (upsert `allergy.recorded`, patch
-`allergy.retired` — the retire-only trigger rejects anything else),
-`patient_merge_history` (upsert `patient.merged` only; no update policy exists,
-so patch is refused twice).
+Registered tables: 24 across the Phase 2 clinical modules — MPI (`patients`,
+`patient_allergies`, `patient_merge_history`), EMR (`clinical_encounters`,
+`encounter_amendments`), laboratory (`lab_orders`, `lab_specimens`,
+`lab_results`), prescriptions and pharmacy (`prescriptions`,
+`prescription_items`, `pharmacy_dispenses`, `medication_administrations`),
+scheduling and stay management (`appointments`, `beds`, `bed_assignments`,
+`discharges`), billing (`invoices`, `invoice_lines`, `payments`, `refunds`) and
+inventory (`stock_items`, `stock_locations`, `stock_batches`,
+`stock_movements`). Each entry carries its own operation allowlist and audit
+actions: append-only event tables accept `upsert` only, and the retire-only and
+status-transition tables are refused at the database as well as here.
 
 The Flutter connector (`NodexBackendConnector.uploadData`) submits PowerSync
 CRUD batches with UUIDv5 ids derived from the queue position, so retries land

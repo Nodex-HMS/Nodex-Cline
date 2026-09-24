@@ -26,7 +26,13 @@ abstract interface class InventoryRepository {
   /// Movements for one item, newest first.
   Future<List<StockMovement>> listMovements(String itemId);
 
-  /// Active batches at a specific location.
+  /// Batches a ward could issue that are linked to a location by the movement
+  /// ledger.
+  ///
+  /// The local projection holds no per-location quantity, so this is not a
+  /// location balance: it returns the issuable batches of items whose movements
+  /// touch that location. A balance at a location is computed server-side from
+  /// `stock_movements`.
   Future<List<StockBatch>> listBatchesAtLocation(String locationId);
 
   /// Registers a new stock item.
@@ -99,7 +105,11 @@ final class DefaultInventoryRepository implements InventoryRepository {
     try {
       final List<Map<String, Object?>> rows = await _store.query(
         'SELECT * FROM ${LocalTables.stockBatches} WHERE item_id = ? AND status IN (?, ?) ORDER BY received_at DESC',
-        <Object?>[itemId, BatchStatus.available.wireValue, BatchStatus.reserved.wireValue],
+        <Object?>[
+          itemId,
+          BatchStatus.available.wireValue,
+          BatchStatus.reserved.wireValue,
+        ],
       );
       return rows.map(StockBatch.fromRow).toList(growable: false);
     } on Object catch (error, stackTrace) {
@@ -123,9 +133,22 @@ final class DefaultInventoryRepository implements InventoryRepository {
   @override
   Future<List<StockBatch>> listBatchesAtLocation(String locationId) async {
     try {
+      // Batches carry no location column, so the link is the movement ledger.
+      // The previous query filtered on `stock_batches.batch_id`, which is not a
+      // column of the table (batches are identified by `id`, and `batch_number`
+      // is the human code), so it could only ever fail at runtime.
       final List<Map<String, Object?>> rows = await _store.query(
-        'SELECT * FROM ${LocalTables.stockBatches} WHERE batch_id IN (SELECT id FROM ${LocalTables.stockBatches} WHERE item_id IN (SELECT item_id FROM ${LocalTables.stockBatches} WHERE batch_id IN (SELECT batch_id FROM ${LocalTables.stockMovements} WHERE to_location_id = ? OR from_location_id = ?)))',
-        <Object?>[locationId, locationId],
+        'SELECT * FROM ${LocalTables.stockBatches} WHERE item_id IN '
+        '(SELECT item_id FROM ${LocalTables.stockMovements} '
+        'WHERE to_location_id = ? OR from_location_id = ?) '
+        'AND status IN (?, ?) '
+        'ORDER BY received_at DESC',
+        <Object?>[
+          locationId,
+          locationId,
+          BatchStatus.available.wireValue,
+          BatchStatus.reserved.wireValue,
+        ],
       );
       return rows.map(StockBatch.fromRow).toList(growable: false);
     } on Object catch (error, stackTrace) {
@@ -164,10 +187,7 @@ final class DefaultInventoryRepository implements InventoryRepository {
   ) async {
     final String id = const Uuid().v4();
     try {
-      await _store.insert(table, <String, Object?>{
-        ...row,
-        'id': id,
-      });
+      await _store.insert(table, <String, Object?>{...row, 'id': id});
       _logger.info(
         _module,
         'Inventory write committed locally.',

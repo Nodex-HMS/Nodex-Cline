@@ -113,6 +113,31 @@ abstract final class LocalTables {
 
   /// Discharge records, one per encounter (Module 23). Synced.
   static const String discharges = 'discharges';
+
+  /// Invoices (Module 31). Synced for the caller's billing-read tenants.
+  static const String invoices = 'invoices';
+
+  /// Invoice lines (Module 31). Synced with their invoice.
+  static const String invoiceLines = 'invoice_lines';
+
+  /// Payments against an invoice (Module 31). Synced, append-only.
+  static const String payments = 'payments';
+
+  /// Refunds against a payment (Module 31). Synced, append-only.
+  static const String refunds = 'refunds';
+
+  /// Stock item catalogue (Module 13). Synced for the caller's tenants.
+  static const String stockItems = 'stock_items';
+
+  /// Storage locations (Module 13). Synced with the catalogue.
+  static const String stockLocations = 'stock_locations';
+
+  /// Stock batches (Module 13). Synced so expiry and availability are
+  /// readable offline.
+  static const String stockBatches = 'stock_batches';
+
+  /// Stock movements (Module 13). Synced, append-only.
+  static const String stockMovements = 'stock_movements';
 }
 
 /// Builds the PowerSync schema for the Phase 1 foundation.
@@ -153,6 +178,14 @@ abstract final class NodexLocalSchema {
     _beds,
     _bedAssignments,
     _discharges,
+    _invoices,
+    _invoiceLines,
+    _payments,
+    _refunds,
+    _stockItems,
+    _stockLocations,
+    _stockBatches,
+    _stockMovements,
   ]);
 
   static const Table _tenants = Table(LocalTables.tenants, <Column>[
@@ -922,6 +955,219 @@ abstract final class NodexLocalSchema {
         IndexedColumn('tenant_id'),
         IndexedColumn('status'),
       ]),
+    ],
+  );
+
+  /// Invoices: a closed invoice is immutable, so the local projection carries
+  /// the closure reason as well as the settled amount.
+  static const Table _invoices = Table(
+    LocalTables.invoices,
+    <Column>[
+      Column.text('tenant_id'),
+      Column.text('patient_id'),
+      Column.text('encounter_id'),
+      Column.text('created_by'),
+      Column.text('invoice_code'),
+      Column.text('status'),
+      Column.text('currency'),
+      Column.integer('total_minor'),
+      Column.integer('settled_minor'),
+      Column.text('notes'),
+      Column.text('issued_at'),
+      Column.text('settled_at'),
+      Column.text('closed_at'),
+      Column.text('closure_reason'),
+      Column.text('created_at'),
+      Column.text('updated_at'),
+    ],
+    indexes: <Index>[
+      Index('invoice_patient', <IndexedColumn>[
+        IndexedColumn('patient_id'),
+        IndexedColumn('created_at'),
+      ]),
+      Index('invoice_status', <IndexedColumn>[
+        IndexedColumn('tenant_id'),
+        IndexedColumn('status'),
+      ]),
+      Index('invoice_code', <IndexedColumn>[IndexedColumn('invoice_code')]),
+    ],
+  );
+
+  /// Invoice lines: totals are minor units, so line arithmetic stays exact on
+  /// the device and cannot drift from the server's running total.
+  static const Table _invoiceLines = Table(
+    LocalTables.invoiceLines,
+    <Column>[
+      Column.text('tenant_id'),
+      Column.text('invoice_id'),
+      Column.integer('line_number'),
+      Column.text('description'),
+      Column.real('quantity'),
+      Column.integer('unit_price_minor'),
+      Column.integer('line_total_minor'),
+      Column.text('created_at'),
+      Column.text('updated_at'),
+    ],
+    indexes: <Index>[
+      Index('invoice_line_invoice', <IndexedColumn>[
+        IndexedColumn('invoice_id'),
+        IndexedColumn('line_number'),
+      ]),
+    ],
+  );
+
+  /// Payments: append-only, so a device holding an invoice holds its full
+  /// receipt history.
+  static const Table _payments = Table(
+    LocalTables.payments,
+    <Column>[
+      Column.text('tenant_id'),
+      Column.text('invoice_id'),
+      Column.text('recorded_by'),
+      Column.integer('amount_minor'),
+      Column.integer('amount_received_minor'),
+      Column.text('method'),
+      Column.text('reference'),
+      Column.text('note'),
+      Column.text('paid_at'),
+      Column.text('created_at'),
+    ],
+    indexes: <Index>[
+      Index('payment_invoice', <IndexedColumn>[
+        IndexedColumn('invoice_id'),
+        IndexedColumn('paid_at'),
+      ]),
+    ],
+  );
+
+  /// Refunds: append-only and always linked to the payment they reverse.
+  static const Table _refunds = Table(
+    LocalTables.refunds,
+    <Column>[
+      Column.text('tenant_id'),
+      Column.text('invoice_id'),
+      Column.text('payment_id'),
+      Column.text('recorded_by'),
+      Column.integer('amount_minor'),
+      Column.text('reason'),
+      Column.text('refunded_at'),
+      Column.text('created_at'),
+    ],
+    indexes: <Index>[
+      Index('refund_invoice', <IndexedColumn>[
+        IndexedColumn('invoice_id'),
+        IndexedColumn('refunded_at'),
+      ]),
+    ],
+  );
+
+  /// Stock item catalogue: the local projection of what a ward may hold, so a
+  /// request can be validated before it reaches the network.
+  static const Table _stockItems = Table(
+    LocalTables.stockItems,
+    <Column>[
+      Column.text('tenant_id'),
+      Column.text('item_code'),
+      Column.text('name'),
+      Column.text('description'),
+      Column.text('category'),
+      Column.text('unit'),
+      Column.text('status'),
+      Column.real('reorder_level'),
+      Column.integer('standard_cost_minor'),
+      Column.integer('requires_batch'),
+      Column.integer('requires_expiry'),
+      Column.text('created_by'),
+      Column.text('created_at'),
+      Column.text('updated_at'),
+    ],
+    indexes: <Index>[
+      Index('stock_item_code', <IndexedColumn>[
+        IndexedColumn('tenant_id'),
+        IndexedColumn('item_code'),
+      ]),
+      Index('stock_item_status', <IndexedColumn>[
+        IndexedColumn('tenant_id'),
+        IndexedColumn('status'),
+      ]),
+    ],
+  );
+
+  /// Storage locations: facility or ward scoped shelves and fridges.
+  static const Table _stockLocations = Table(
+    LocalTables.stockLocations,
+    <Column>[
+      Column.text('tenant_id'),
+      Column.text('facility_id'),
+      Column.text('ward_id'),
+      Column.text('location_code'),
+      Column.text('name'),
+      Column.text('location_type'),
+      Column.text('status'),
+      Column.text('created_at'),
+      Column.text('updated_at'),
+    ],
+    indexes: <Index>[
+      Index('stock_location_code', <IndexedColumn>[
+        IndexedColumn('tenant_id'),
+        IndexedColumn('location_code'),
+      ]),
+    ],
+  );
+
+  /// Stock batches: expiry and availability must be readable offline, since a
+  /// ward checks both before administering.
+  static const Table _stockBatches = Table(
+    LocalTables.stockBatches,
+    <Column>[
+      Column.text('tenant_id'),
+      Column.text('item_id'),
+      Column.text('batch_number'),
+      Column.text('expiry_date'),
+      Column.text('manufactured_date'),
+      Column.integer('quantity_minor'),
+      Column.integer('cost_per_unit_minor'),
+      Column.text('status'),
+      Column.text('received_at'),
+      Column.text('created_at'),
+      Column.text('updated_at'),
+    ],
+    indexes: <Index>[
+      Index('stock_batch_item', <IndexedColumn>[
+        IndexedColumn('item_id'),
+        IndexedColumn('status'),
+      ]),
+      Index('stock_batch_expiry', <IndexedColumn>[
+        IndexedColumn('expiry_date'),
+      ]),
+    ],
+  );
+
+  /// Stock movements: append-only transfer and issue history.
+  static const Table _stockMovements = Table(
+    LocalTables.stockMovements,
+    <Column>[
+      Column.text('tenant_id'),
+      Column.text('item_id'),
+      Column.text('batch_id'),
+      Column.text('from_location_id'),
+      Column.text('to_location_id'),
+      Column.text('movement_type'),
+      Column.integer('quantity_minor'),
+      Column.integer('unit_cost_minor'),
+      Column.text('reference_type'),
+      Column.text('reference_id'),
+      Column.text('reason'),
+      Column.text('recorded_by'),
+      Column.text('recorded_at'),
+      Column.text('created_at'),
+    ],
+    indexes: <Index>[
+      Index('stock_movement_item', <IndexedColumn>[
+        IndexedColumn('item_id'),
+        IndexedColumn('recorded_at'),
+      ]),
+      Index('stock_movement_batch', <IndexedColumn>[IndexedColumn('batch_id')]),
     ],
   );
 }

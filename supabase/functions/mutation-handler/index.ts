@@ -597,7 +597,11 @@ const WRITABLE_TABLES: Readonly<Record<string, TableRule>> = {
       recorded_at: 'timestamp',
       created_at: 'timestamp',
     },
-    operations: ['upsert', 'patch'],
+    // Append-only: a movement is evidence of a transfer, and balances replay
+    // from this ledger, so a rewrite would falsify the balance. No patch
+    // operation exists here, and `stock_movements_append_only` refuses UPDATE
+    // and DELETE even if a caller asks directly.
+    operations: ['upsert'],
     auditActionUpsert: 'inventory.movement.recorded',
     auditActionPatch: 'inventory.movement.updated',
   },

@@ -12,7 +12,7 @@ re-deriving decisions. Read this first, then `README.md` for architecture.
 | Repository | `github.com/Nodex-HMS/Nodex-Cline`, branch `main` |
 | Phase 1 + 2 commit | `de396ca` — "feat: NODEX Enterprise HMS - Phase 1 platform foundation + Phase 2 core clinical modules"; merge `57aef73` |
 | Supabase project | ref `afvncnzdhobvnweixgdm`, URL `https://afvncnzdhobvnweixgdm.supabase.co` |
-| Migrations | `supabase/migrations/` — 40 files, all 40 applied to `afvncnzdhobvnweixgdm` and confirmed via `list_migrations`. Statement content verified against `supabase_migrations.schema_migrations`. Note: the migration tool strips `--` comments when recording, so verify semantics not bytes. |
+| Migrations | `supabase/migrations/` — 41 files, all 41 applied to `afvncnzdhobvnweixgdm` and confirmed via `list_migrations`. Statement content verified against `supabase_migrations.schema_migrations`. Note: the migration tool strips `--` comments when recording, so verify semantics not bytes. |
 | Source spec | `NODEX_HMS_Final.pdf`, 44 pages (read with `pdftotext -layout`; the PDF reader tool cannot handle PDFs on this model) |
 
 ---
@@ -160,13 +160,54 @@ in the migration headers):
   the trigger (RLS cannot distinguish them from draft edits); item release
   rides on the header authorization so prescribers need no dispense permission
 
-Next module: billing (31). The discharge vertical slice is complete at the
+Billing (31) and inventory (13) landed after these slices; section 4 records the
+wiring defects found and fixed in the session that applied their migrations.
+The discharge vertical slice is complete at the
 code level (410 tests passing): one finalized record per encounter, draft on
 encounter.write with high-risk online-only finalization enforced in-trigger,
 immutable after finalizing, encounter picker on the patient record, and a
 bed-release shortcut closing the stay loop. Hardware barcode scanning,
 PowerSync device verification and clinical deployment validation remain
 across all clinical slices.
+
+### 4. Billing (module 31) and inventory (module 13) wiring (fixed)
+
+Both modules shipped migrations, domain models, repositories and screens before
+their client-side wiring existed, and the tree did not compile:
+`lib/core/storage/local_schema.dart` declared no local tables for them while
+`billing_repository.dart` and `inventory_repository.dart` referenced
+`LocalTables.invoices`, `LocalTables.invoiceLines`, `LocalTables.payments`,
+`LocalTables.refunds`, `LocalTables.stockItems`, `LocalTables.stockLocations`,
+`LocalTables.stockBatches` and `LocalTables.stockMovements` — eight unresolved
+symbols, which no test could catch because neither module had a repository test
+yet. Three defects, fixed together:
+
+- **Missing local tables.** The eight tables are now declared with every server
+  column and registered in `NodexLocalSchema.build()`, pinned by
+  `local_schema_test.dart`. A drift check that resolves every local column
+  against `information_schema.columns` now returns zero rows across all 37
+  synced tables.
+- **Missing sync buckets.** `sync-rules.yaml` had no bucket for either module,
+  so the local tables would have stayed empty even once they existed.
+  `billing_ledger` (`billing.read`) and `stock_control` (`patient.read`) mirror
+  their RLS policy families; both parameter queries and all eight data queries
+  were executed against the live project to prove the SQL and the scope.
+- **A boolean cast that only fails offline.** `StockItem.fromRow` read
+  `requires_batch` / `requires_expiry` with `as bool?`. PostgREST sends JSON
+  booleans, but the SQLite projection holds 0/1, so the cast would have thrown
+  on the device and never in a server test. It now parses both shapes and
+  throws a named `FormatException` otherwise, matching the MPI convention.
+
+Applying the inventory migration also surfaced that `stock_movements` — the
+module's append-only ledger, and the table balances replay from — had no
+append-only guard and still carried a writer-scoped UPDATE policy, so a recorded
+movement could be rewritten through the API by anyone holding
+`inventory.movement`. `phase2_stock_movements_append_only` adds the same
+`tg_block_mutation` guard `payments`, `refunds`, `pharmacy_dispenses` and the
+event tables use, and drops the UPDATE policy; the mutation-handler rule is
+`upsert`-only for that table. Enforcement was verified by writing a movement and
+observing the UPDATE refused with `42501` inside a subtransaction that rolls the
+probe back, so no probe row survives.
 
 ---
 

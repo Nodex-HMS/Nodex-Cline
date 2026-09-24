@@ -26,45 +26,56 @@ void main() {
       expect(schema.validate, returnsNormally);
     });
 
-    test('declares every Phase 1 table plus Modules 07, 10, 16, 17 and 25', () {
-      final Set<String> tableNames = schema.tables
-          .map((Table table) => table.name)
-          .toSet();
+    test(
+      'declares every Phase 1 table plus Modules 07, 10, 13, 16, 17, 25 and 31',
+      () {
+        final Set<String> tableNames = schema.tables
+            .map((Table table) => table.name)
+            .toSet();
 
-      expect(tableNames, <String>{
-        LocalTables.tenants,
-        LocalTables.facilities,
-        LocalTables.departments,
-        LocalTables.wards,
-        LocalTables.appUsers,
-        LocalTables.roles,
-        LocalTables.permissions,
-        LocalTables.rolePermissions,
-        LocalTables.memberships,
-        LocalTables.devices,
-        LocalTables.syncCursors,
-        LocalTables.aiModelRegistry,
-        LocalTables.aiRoutingPolicies,
-        LocalTables.localMutationLog,
-        LocalTables.localDiagnostics,
-        LocalTables.patients,
-        LocalTables.patientAllergies,
-        LocalTables.patientMergeHistory,
-        LocalTables.clinicalEncounters,
-        LocalTables.encounterAmendments,
-        LocalTables.labOrders,
-        LocalTables.labSpecimens,
-        LocalTables.labResults,
-        LocalTables.prescriptions,
-        LocalTables.prescriptionItems,
-        LocalTables.pharmacyDispenses,
-        LocalTables.medicationAdministrations,
-        LocalTables.appointments,
-        LocalTables.beds,
-        LocalTables.bedAssignments,
-        LocalTables.discharges,
-      });
-    });
+        expect(tableNames, <String>{
+          LocalTables.tenants,
+          LocalTables.facilities,
+          LocalTables.departments,
+          LocalTables.wards,
+          LocalTables.appUsers,
+          LocalTables.roles,
+          LocalTables.permissions,
+          LocalTables.rolePermissions,
+          LocalTables.memberships,
+          LocalTables.devices,
+          LocalTables.syncCursors,
+          LocalTables.aiModelRegistry,
+          LocalTables.aiRoutingPolicies,
+          LocalTables.localMutationLog,
+          LocalTables.localDiagnostics,
+          LocalTables.patients,
+          LocalTables.patientAllergies,
+          LocalTables.patientMergeHistory,
+          LocalTables.clinicalEncounters,
+          LocalTables.encounterAmendments,
+          LocalTables.labOrders,
+          LocalTables.labSpecimens,
+          LocalTables.labResults,
+          LocalTables.prescriptions,
+          LocalTables.prescriptionItems,
+          LocalTables.pharmacyDispenses,
+          LocalTables.medicationAdministrations,
+          LocalTables.appointments,
+          LocalTables.beds,
+          LocalTables.bedAssignments,
+          LocalTables.discharges,
+          LocalTables.invoices,
+          LocalTables.invoiceLines,
+          LocalTables.payments,
+          LocalTables.refunds,
+          LocalTables.stockItems,
+          LocalTables.stockLocations,
+          LocalTables.stockBatches,
+          LocalTables.stockMovements,
+        });
+      },
+    );
 
     test('does not replicate audit or clinical event tables to the device', () {
       // Append-only history is read through the server, not held locally: a
@@ -499,6 +510,146 @@ void main() {
           'scheduled_start',
           'scheduled_end',
           'cancel_reason',
+        }),
+      );
+    });
+
+    test('billing tables mirror the Module 31 ledger schema', () {
+      // Money is stored in minor units and must stay integral locally: a device
+      // that rounds a total would disagree with the server's running total.
+      Table byName(String name) =>
+          schema.tables.firstWhere((Table table) => table.name == name);
+
+      expect(
+        byName(LocalTables.invoices).columns.map((Column c) => c.name).toSet(),
+        containsAll(<String>{
+          'tenant_id',
+          'patient_id',
+          'encounter_id',
+          'created_by',
+          'invoice_code',
+          'status',
+          'currency',
+          'total_minor',
+          'settled_minor',
+          'issued_at',
+          'settled_at',
+          'closed_at',
+          'closure_reason',
+        }),
+      );
+      expect(
+        byName(LocalTables.invoiceLines).columns
+            .map((Column c) => c.name)
+            .toSet(),
+        containsAll(<String>{
+          'tenant_id',
+          'invoice_id',
+          'line_number',
+          'description',
+          'quantity',
+          'unit_price_minor',
+          'line_total_minor',
+        }),
+      );
+      expect(
+        byName(LocalTables.payments).columns.map((Column c) => c.name).toSet(),
+        containsAll(<String>{
+          'tenant_id',
+          'invoice_id',
+          'recorded_by',
+          'amount_minor',
+          'amount_received_minor',
+          'method',
+          'reference',
+          'paid_at',
+        }),
+      );
+      expect(
+        byName(LocalTables.refunds).columns.map((Column c) => c.name).toSet(),
+        containsAll(<String>{
+          'tenant_id',
+          'invoice_id',
+          'payment_id',
+          'recorded_by',
+          'amount_minor',
+          'reason',
+          'refunded_at',
+        }),
+      );
+    });
+
+    test('inventory tables mirror the Module 13 stock schema', () {
+      // A ward validates a request against the local projection, so expiry,
+      // availability and location all have to travel with the item.
+      Table byName(String name) =>
+          schema.tables.firstWhere((Table table) => table.name == name);
+
+      expect(
+        byName(LocalTables.stockItems).columns
+            .map((Column c) => c.name)
+            .toSet(),
+        containsAll(<String>{
+          'tenant_id',
+          'item_code',
+          'name',
+          'category',
+          'unit',
+          'status',
+          'reorder_level',
+          'standard_cost_minor',
+          'requires_batch',
+          'requires_expiry',
+        }),
+      );
+      expect(
+        byName(LocalTables.stockLocations).columns
+            .map((Column c) => c.name)
+            .toSet(),
+        containsAll(<String>{
+          'tenant_id',
+          'facility_id',
+          'ward_id',
+          'location_code',
+          'name',
+          'location_type',
+          'status',
+        }),
+      );
+      expect(
+        byName(LocalTables.stockBatches).columns
+            .map((Column c) => c.name)
+            .toSet(),
+        containsAll(<String>{
+          'tenant_id',
+          'item_id',
+          'batch_number',
+          'expiry_date',
+          'manufactured_date',
+          'quantity_minor',
+          'cost_per_unit_minor',
+          'status',
+          'received_at',
+        }),
+      );
+      expect(
+        byName(LocalTables.stockMovements).columns
+            .map((Column c) => c.name)
+            .toSet(),
+        containsAll(<String>{
+          'tenant_id',
+          'item_id',
+          'batch_id',
+          'from_location_id',
+          'to_location_id',
+          'movement_type',
+          'quantity_minor',
+          'unit_cost_minor',
+          'reference_type',
+          'reference_id',
+          'reason',
+          'recorded_by',
+          'recorded_at',
         }),
       );
     });
