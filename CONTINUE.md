@@ -247,9 +247,20 @@ Deferred deliberately, not overlooked.
   password is a throwaway and **must be rotated** before the instance is shared.
 - **Auth hardening toggles are dashboard-only.** Leaked-password protection is
   reported disabled by the security advisor and cannot be enabled from SQL.
-- **CI secrets are not populated.** `.github/workflows/ci.yml` needs
-  `NODEX_SUPABASE_URL` and `NODEX_SUPABASE_PUBLISHABLE_KEY` repository secrets
-  before a release APK job will pass its preflight check.
+- **CI secrets are populated.** `.github/workflows/ci.yml` holds
+  `NODEX_SUPABASE_URL` and `NODEX_SUPABASE_PUBLISHABLE_KEY` as repository secrets,
+  so the release APK job's preflight check is satisfied. Both values were checked
+  against the live project before they were stored: `/auth/v1/health` returns 200
+  with the publishable key as `apikey`, and `/rest/v1/tenants` returns an empty
+  array to an anonymous request — RLS holding, not a configuration fault. The
+  release build itself is still unexercised, because that job runs only on a `v*`
+  tag.
+- **A paused project fails without saying so.** The project was found `INACTIVE`
+  on 2026-10-01 and every backend path failed as a transport error —
+  `list_migrations` returned "connection terminated due to connection timeout" or
+  `ECONNREFUSED`, and the REST root returned 401 — which reads as a broken schema
+  or a bad key rather than a stalled instance. Check `status` first (`RESTORING`
+  while it comes up, then `ACTIVE_HEALTHY`) before debugging anything else.
 
 ---
 
