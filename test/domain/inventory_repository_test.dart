@@ -200,7 +200,7 @@ void main() {
       // The SQLite projection holds integers for booleans while PostgREST sends
       // JSON booleans. A plain `as bool?` cast worked online and threw on the
       // device, which is exactly the failure a server-side test cannot see.
-      final StockItem local = StockItem.fromRow(<String, Object?>{
+      final StockItem local = StockItem.fromRow(const <String, Object?>{
         'id': 'item-1',
         'tenant_id': 'tenant-1',
         'item_code': 'GEN-002',
@@ -216,7 +216,7 @@ void main() {
       expect(local.requiresBatch, isTrue);
       expect(local.requiresExpiry, isFalse);
 
-      final StockItem server = StockItem.fromRow(<String, Object?>{
+      final StockItem server = StockItem.fromRow(const <String, Object?>{
         'id': 'item-2',
         'tenant_id': 'tenant-1',
         'item_code': 'GEN-003',
@@ -234,7 +234,7 @@ void main() {
     });
 
     test('a missing flag stays null rather than defaulting to false', () {
-      final StockItem item = StockItem.fromRow(<String, Object?>{
+      final StockItem item = StockItem.fromRow(const <String, Object?>{
         'id': 'item-4',
         'tenant_id': 'tenant-1',
         'item_code': 'GEN-004',
@@ -251,7 +251,7 @@ void main() {
 
     test('a non-boolean flag is a named error, not a cast failure', () {
       expect(
-        () => StockItem.fromRow(<String, Object?>{
+        () => StockItem.fromRow(const <String, Object?>{
           'id': 'item-5',
           'tenant_id': 'tenant-1',
           'item_code': 'GEN-005',

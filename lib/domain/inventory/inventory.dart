@@ -19,6 +19,9 @@ enum StockItemStatus {
 
   final String wireValue;
 
+  /// Whether the item can still be modified (discontinued items are terminal).
+  bool get isEditable => this != StockItemStatus.discontinued;
+
   static StockItemStatus fromWire(String value) =>
       StockItemStatus.values.firstWhere(
         (StockItemStatus status) => status.wireValue == value,
