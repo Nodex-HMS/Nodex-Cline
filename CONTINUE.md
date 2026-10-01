@@ -46,15 +46,15 @@ flutter analyze --fatal-infos --fatal-warnings
 flutter test
 ```
 
-Expected: no formatting changes, no analyzer issues, 410 tests passing. If any of
+Expected: no formatting changes, no analyzer issues, 442 tests passing. If any of
 those fail on a clean checkout, fix that before writing new code — CI enforces
 all three.
 
 ### Verify the backend matches
 
 ```bash
-supabase link --project-ref neoernavfntxsotwvmwq
-supabase migration list     # local and remote should agree on all 19
+supabase link --project-ref afvncnzdhobvnweixgdm
+supabase migration list     # local and remote should agree on all 41
 ```
 
 ---
@@ -63,7 +63,7 @@ supabase migration list     # local and remote should agree on all 19
 
 Recorded so they are not relitigated. Each was a real choice with alternatives.
 
-**Migrations are kept unsquashed.** Two of the nineteen supersede earlier work
+**Migrations are kept unsquashed.** Two of the forty-one supersede earlier work
 (`phase1_snapshot_revocation_guard`, `phase1_dedupe_app_user_guard`). They stay
 because the history explains why the first attempt was wrong — a blanket UPDATE
 block on snapshots also blocked legitimate device revocation.

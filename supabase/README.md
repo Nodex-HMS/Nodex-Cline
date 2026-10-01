@@ -56,7 +56,7 @@ a redundant second guard trigger on `app_users`.
 
 ```bash
 supabase login
-supabase link --project-ref neoernavfntxsotwvmwq
+supabase link --project-ref afvncnzdhobvnweixgdm
 supabase migration list      # local and remote should match
 ```
 
